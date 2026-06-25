@@ -1,6 +1,6 @@
 # LLM-Driven DAW Project — Master Handoff
 
-> **ABSTRACT (English, for any LLM picking this up cold):** This is the *master* orchestration document for the LLM-driven DAW project. The goal is **100% natural-language control of a Digital Audio Workstation** — the audio-app analogue of Codex/Cursor for code. Work is split across **three GitHub repos** (Ardour fork, Audacity blueprint, Electron companion). Each repo has its own focused handoff; **this document is the cross-cutting one** — the chronological narrative, the decision tree, the reasoning behind every choice, the *current* state vs the **100%** definition, and a prioritized, file-level task list so a fresh LLM can pick up the next task without asking the user any historical question. Prose is Japanese (technical identifiers in English). Every claim carries a citation: `file:line`, commit SHA, or section reference. If you only have 5 minutes, read §0 and §11. To start working immediately, read §8 (auto-start protocol) and pick a task from §7.
+> **ABSTRACT (English, for any LLM picking this up cold):** This is the *master* orchestration document for the LLM-driven DAW project. The goal is **100% natural-language control of a Digital Audio Workstation** — the audio-app analogue of Codex/Cursor for code. Work is split across **two GitHub repos** (Ardour fork + Electron companion). A separate Audacity project (`masatomoota/audacity`) exists but is **out of scope** for this handoff and is developed independently. Each repo has its own focused handoff; **this document is the cross-cutting one** — the chronological narrative, the decision tree, the reasoning behind every choice, the *current* state vs the **100%** definition, and a prioritized, file-level task list so a fresh LLM can pick up the next task without asking the user any historical question. Prose is Japanese (technical identifiers in English). Every claim carries a citation: `file:line`, commit SHA, or section reference. If you only have 5 minutes, read §0 and §11. To start working immediately, read §8 (auto-start protocol) and pick a task from §7.
 
 ---
 
@@ -11,6 +11,16 @@
 各リポのハンドオフは「そのリポの中で次に何をするか」を教える。本書は「どのリポの何から手を付けるか」を教える。
 
 > **重要原則**：本書は「次のLLMが**ユーザーに歴史を尋ねずに**自律的に着手できる」ことを最優先に書かれている。記載が冗長に見えても、それは「次のLLMが推測で動くより、ここを読んで確信を持って動くほうが結果が良い」という判断による。
+
+---
+
+## §0.5. スコープ宣言（重要）
+
+本プロジェクトのアクティブな作業対象は **Ardour fork** と **Electron Companion** の 2 リポのみ。
+
+`masatomoota/audacity` (mcp-llm ブランチ) は**別の LLM が独立して開発しているプロジェクト**であり、本プロジェクトのスコープ外。本書では (a) 歴史的経緯の説明（§4.3, §6.D5）と (b) リファレンスリンクの提供以外で Audacity リポに触れてはならない。Audacity 側の handoff・コード・push 操作はすべて他プロジェクトの管轄。
+
+> **次の LLM へ**：本ハンドオフから §7 のタスクに着手する際、Audacity 関連を提案・実装しないこと。Audacity に "perception commands" 等の優れた実装が存在することは事実だが、それを Ardour に移植するなどの「橋渡し」も**ユーザー明示指示があるまで実施しない**。
 
 ---
 
@@ -70,22 +80,12 @@
                                     │
                                     ▼
                          api.anthropic.com (Claude)
-
-
-                   ┌─ Audacity blueprint (GPLv2-or-later, 3.x base) ──────────┐
-                   │ masatomoota/audacity                                      │
-                   │ branch: mcp-llm                                           │
-                   │ - Phase 0 commands IMPLEMENTED (perception suite incl GetLoudness/GetAudioStats/GetSpectrum) │
-                   │ - Targets audacity3 branch (3.x, NOT 4.0-alpha)          │
-                   │ - Branch: mcp-llm (consolidated single-repo layout, audacity-mcp/) │
-                   │ - GetInfo Type=Commands Format=JSON → tools/list 自動    │
-                   └─────────────────────────────────────────────────────────┘
 ```
 
 ### 2.1 各リポの役割
 - **Ardour fork**：**現在のメイン作業対象**。MCP サーバ＋ハードニング＋メータが**実機検証済み**（96 tools, Host: evil.example.com→403, track_get_meter live success）。Phase 1〜4 の追加実装はすべてこのリポに来る。
 - **Companion (ardour-mcp-chat)**：MCP **クライアント**。Ardour 側拡張に追従して伸ばす（ツール選別 UI、ストリーミング応答、配布など）。MIT なのでクローズド派生も可能。
-- **Audacity**：第二の DAW として`mcp-llm` ブランチで実装が進行中。Phase 0 のコマンド（GetLoudness の integrated/short-term/momentary, GetAudioStats の true-peak, GetSpectrum, DetectSilence, DetectOnsets 等の **知覚系コマンド**）が既に実装済み。詳細は `audacity-mcp/MCP_PHASE0_IMPLEMENTATION_HANDOFF.md` と `audacity-mcp/MCP_LLM_CONTROL_HANDOFF.md`。GitHub: `masatomoota/audacity` の `mcp-llm` ブランチ。
+- **Audacity** (`masatomoota/audacity`)：**本プロジェクトのスコープ外**。別 LLM が独立開発中。詳細は §0.5 参照。
 
 ---
 
@@ -100,8 +100,6 @@
 - ✅ Host ヘッダ検証 → `Host: evil.example.com` で HTTP 403（DNS-rebinding 対策動作確認）
 - ✅ `track/get_meter` ツール → master bus の `peak_meter()->meter_level(n, MeterPeak)` を dBFS で返す
 - ✅ Electron コンパニオンアプリ：ビルド成功、SDK 解決、MCP クライアント単体テスト OK、Electron 起動 OK
-- ✅ Audacity 側 Phase 0：mcp-llm ブランチ（audacity-mcp/）で MCP コマンド実装、特に **知覚系（perception）コマンドが充実**：GetLoudness（LUFS integrated/short-term-max/momentary-max）、GetAudioStats（true-peak、peak、RMS）、GetSpectrum、DetectSilence、DetectOnsets。Ardour 側よりも perception の深さで先行。
-- ✅ Audacity の handoff 2 部：`MCP_LLM_CONTROL_HANDOFF.md`（プロジェクト全体）、`MCP_PHASE0_IMPLEMENTATION_HANDOFF.md`（Phase 0 実装詳細）
 
 ### 3.2 取り組まれていない（次の作業対象）
 - ❌ 納品系（export / bounce / stem）→ **T1（§7）**
@@ -114,12 +112,10 @@
 - ❌ 波形/スペクトルのサンプル値読み出し
 - ❌ ターン制ロック（多段編集の原子性）
 - ❌ コンパニオン側：ツール選別UI、ストリーミング、配布パッケージ
-- ⚠️ Audacity と Ardour の機能差：Audacity に在って Ardour に無い perception commands（LUFS / spectrum / silence / onset detection）の Ardour 側ポート、または Ardour 側で同等を新規実装
 
 ### 3.3 設計済みだが未着手
 - **ターン制ロック・モデル（fix_plan v2 §5）**：人間と LLM の編集を排他、自動 snapshot、リース／奪取
 - **Win11 ビルド**：MinGW クロスコンパイル前提。`libs/surfaces/mcp_http/wscript` に `_WIN32_WINNT=0x0601` 追加が必要（既存 `websockets/wscript:38-39` に倣う）
-- **Audacity `mod-mcp-server`**：3.x（`audacity3` ブランチ）上で `mod-script-pipe` を複製、`GetInfo Type=Commands` から tools/list 自動生成
 
 ---
 
@@ -440,13 +436,6 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 **複雑度**：M〜L
 
-### T15: Audacity 拡張
-**どこ**：Phase 0 は既に実装済み（mcp-llm ブランチ）。次は Audacity の perception commands（LUFS / spectrum 等）の Ardour 側へのポート、または Audacity 自身の Phase 1/2 拡張。詳細は `audacity-mcp/MCP_*_HANDOFF.md`。
-
-**完成条件**：Audacity でも 250+ ツールが LLM から呼び出せる、かつ Ardour 側に知覚系コマンドが移植またはミラー実装される
-
-**複雑度**：L（新規リポジトリでの単独着手）
-
 ### 推奨着手順
 1. **まず T1**（納品口を開ける）— ここを通せば「使える DAW」になる
 2. **次に T2**（オートメーション）— ミックスが本当に動かせる
@@ -455,7 +444,6 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 5. T4〜T8 を機会的に
 6. T11〜T13 でコンパニオンを実用品に
 7. T14 で外部利用解放
-8. T15 で Audacity 横展開
 
 ---
 
@@ -629,13 +617,12 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - **どこまで出来てる？** — Ardour MCP サーバが**ハードニング済みで稼働**（96 tools / port 4820）、Electron コンパニオンが**ビルド済み**、両者が**ライブ疎通検証パス**。
 - **何が足りない？** — **納品（export）／オートメーション曲線／SSE 通知**の 3 つが致命的欠落。これら（§7 の T1〜T3）が埋まれば実用 90%。
 - **何をすればいい？** — §8 の手順で環境再現 → §7 から T1（`session/export_audio`）に着手。
-- **どこにある？** — 3 repos：`masatomoota/{ardour, ardour-mcp-chat, audacity}`。各 repo に専用 HANDOFF.md。本書はそれら横断のメタ文書。
+- **どこにある？** — 2 repos（アクティブ作業対象）：`masatomoota/{ardour, ardour-mcp-chat}`。各 repo に専用 HANDOFF.md。本書はそれら横断のメタ文書。
 
 ```
 リポ                              ブランチ                  状態
 masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、Phase 1-4 未
 masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polish 余地あり
-masatomoota/audacity            mcp-llm-handoff          handoff のみ、コード無し
 ```
 
 ---
@@ -661,7 +648,7 @@ masatomoota/audacity            mcp-llm-handoff          handoff のみ、コー
 ### 12.3 GitHub
 - https://github.com/masatomoota/ardour
 - https://github.com/masatomoota/ardour-mcp-chat
-- https://github.com/masatomoota/audacity
+- https://github.com/masatomoota/audacity （別プロジェクト、本プロジェクトのスコープ外）
 - https://github.com/masatomoota/llm-daw-handoff （本リポ）
 
 ### 12.4 来歴・検証メタデータ
