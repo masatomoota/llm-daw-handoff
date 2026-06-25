@@ -72,12 +72,12 @@
                          api.anthropic.com (Claude)
 
 
-                   ┌─ Audacity blueprint (CLA + GPLv3-only ceiling) ─────────┐
+                   ┌─ Audacity blueprint (GPLv2-or-later, 3.x base) ──────────┐
                    │ masatomoota/audacity                                      │
-                   │ branch: mcp-llm-handoff                                   │
-                   │ - MCP_LLM_CONTROL_HANDOFF.md (NO code yet)               │
+                   │ branch: mcp-llm                                           │
+                   │ - Phase 0 commands IMPLEMENTED (perception suite incl GetLoudness/GetAudioStats/GetSpectrum) │
                    │ - Targets audacity3 branch (3.x, NOT 4.0-alpha)          │
-                   │ - Plan: mod-mcp-server reusing mod-script-pipe pattern   │
+                   │ - Branch: mcp-llm (consolidated single-repo layout, audacity-mcp/) │
                    │ - GetInfo Type=Commands Format=JSON → tools/list 自動    │
                    └─────────────────────────────────────────────────────────┘
 ```
@@ -85,7 +85,7 @@
 ### 2.1 各リポの役割
 - **Ardour fork**：**現在のメイン作業対象**。MCP サーバ＋ハードニング＋メータが**実機検証済み**（96 tools, Host: evil.example.com→403, track_get_meter live success）。Phase 1〜4 の追加実装はすべてこのリポに来る。
 - **Companion (ardour-mcp-chat)**：MCP **クライアント**。Ardour 側拡張に追従して伸ばす（ツール選別 UI、ストリーミング応答、配布など）。MIT なのでクローズド派生も可能。
-- **Audacity**：第二の DAW としての可能性調査済み。実装は未着手（`audacity3` ブランチに `mod-mcp-server` を追加する設計が handoff に書かれている）。Ardour 系で 100% 達成後、もしくは並行で着手。
+- **Audacity**：第二の DAW として`mcp-llm` ブランチで実装が進行中。Phase 0 のコマンド（GetLoudness の integrated/short-term/momentary, GetAudioStats の true-peak, GetSpectrum, DetectSilence, DetectOnsets 等の **知覚系コマンド**）が既に実装済み。詳細は `audacity-mcp/MCP_PHASE0_IMPLEMENTATION_HANDOFF.md` と `audacity-mcp/MCP_LLM_CONTROL_HANDOFF.md`。GitHub: `masatomoota/audacity` の `mcp-llm` ブランチ。
 
 ---
 
@@ -100,6 +100,8 @@
 - ✅ Host ヘッダ検証 → `Host: evil.example.com` で HTTP 403（DNS-rebinding 対策動作確認）
 - ✅ `track/get_meter` ツール → master bus の `peak_meter()->meter_level(n, MeterPeak)` を dBFS で返す
 - ✅ Electron コンパニオンアプリ：ビルド成功、SDK 解決、MCP クライアント単体テスト OK、Electron 起動 OK
+- ✅ Audacity 側 Phase 0：mcp-llm ブランチ（audacity-mcp/）で MCP コマンド実装、特に **知覚系（perception）コマンドが充実**：GetLoudness（LUFS integrated/short-term-max/momentary-max）、GetAudioStats（true-peak、peak、RMS）、GetSpectrum、DetectSilence、DetectOnsets。Ardour 側よりも perception の深さで先行。
+- ✅ Audacity の handoff 2 部：`MCP_LLM_CONTROL_HANDOFF.md`（プロジェクト全体）、`MCP_PHASE0_IMPLEMENTATION_HANDOFF.md`（Phase 0 実装詳細）
 
 ### 3.2 取り組まれていない（次の作業対象）
 - ❌ 納品系（export / bounce / stem）→ **T1（§7）**
@@ -112,7 +114,7 @@
 - ❌ 波形/スペクトルのサンプル値読み出し
 - ❌ ターン制ロック（多段編集の原子性）
 - ❌ コンパニオン側：ツール選別UI、ストリーミング、配布パッケージ
-- ❌ Audacity 側：何もまだ実装されていない（handoff のみ存在）
+- ⚠️ Audacity と Ardour の機能差：Audacity に在って Ardour に無い perception commands（LUFS / spectrum / silence / onset detection）の Ardour 側ポート、または Ardour 側で同等を新規実装
 
 ### 3.3 設計済みだが未着手
 - **ターン制ロック・モデル（fix_plan v2 §5）**：人間と LLM の編集を排他、自動 snapshot、リース／奪取
@@ -438,10 +440,10 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 **複雑度**：M〜L
 
-### T15: Audacity `mod-mcp-server` 実装
-**どこ**：`masatomoota/audacity` の `mcp-llm-handoff` ブランチで `audacity3` から派生 → `modules/mod-mcp-server` 新規。詳細は `MCP_LLM_CONTROL_HANDOFF.md` §4-7。
+### T15: Audacity 拡張
+**どこ**：Phase 0 は既に実装済み（mcp-llm ブランチ）。次は Audacity の perception commands（LUFS / spectrum 等）の Ardour 側へのポート、または Audacity 自身の Phase 1/2 拡張。詳細は `audacity-mcp/MCP_*_HANDOFF.md`。
 
-**完成条件**：Audacity でも 250+ ツールが LLM から呼び出せる
+**完成条件**：Audacity でも 250+ ツールが LLM から呼び出せる、かつ Ardour 側に知覚系コマンドが移植またはミラー実装される
 
 **複雑度**：L（新規リポジトリでの単独着手）
 
