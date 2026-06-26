@@ -104,6 +104,7 @@
 - ✅ Host ヘッダ検証 → `Host: evil.example.com` で HTTP 403（DNS-rebinding 対策動作確認）
 - ✅ `track/get_meter` ツール → master bus の `peak_meter()->meter_level(n, MeterPeak)` を dBFS で返す
 - ✅ Electron コンパニオンアプリ：ビルド成功、SDK 解決、MCP クライアント単体テスト OK、Electron 起動 OK
+- ✅ コンパニオン UI 堅牢化 + T11 ツール選別 UI（Wave Companion-UI、commits `a108538` / `2eb6249`）：日本語 IME Enter 誤送信修正（CRITICAL）、設定ダイアログ高さ制御（560px 最小ウィンドウでも Save ボタン到達可）、disabled 状態の finally 修正、バブル overflow-wrap、フォーカス管理。T11: 設定に 10 名前空間チェックボックス UI、Anthropic 呼び出し前にフィルタしてシステムプロンプトのトークンコスト削減。CDP 実機テスト（--remote-debugging-port=9222）で IME ガード・ダイアログ寸法・T11 レイアウトの全項目を生 Electron レンダラ上でアサーション確認済み。
 - ✅ `session/export_audio` ツール（Wave T1、commit `19853971f07f6f81413b55a298487e5574efa98c`）：マスターバスを WAV ファイルにエクスポート、フリーホイールブロッキングモード、start/length 範囲指定、stereo/mono 選択対応。ツール数 96 → 97。
 - ✅ SSE `GET /events` エンドポイント（Wave T3、commit `43f4848f0979bd83371aec31252cbd43011bba2b`）：`notifications/transport` イベントを Server-Sent Events でストリーミング配信。play/stop/record/loop 各状態変化を JSON-RPC notification 形式で push。ハートビート 15 秒間隔。Host ヘッダ検証適用。**知覚ループ MVP 完了**。
 - ✅ `automation/get_lane`・`automation/set_curve`・`automation/set_mode` ツール（Wave T2、commit `ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`）：route 標準パラメータ（gain/pan/mute/solo/rec_enable）の automation curve 読み書きと mode 変更。`set_curve` は `begin/commit_reversible_command` でラップし 1 undo エントリとして記録。ツール数 97 → 100。**ミックス本丸 MVP 完了**。
@@ -118,7 +119,8 @@
 - ❌ プラグインプリセット保存/呼び出し
 - ❌ 波形/スペクトルのサンプル値読み出し
 - ❌ ターン制ロック（多段編集の原子性）
-- ❌ コンパニオン側：ツール選別UI、ストリーミング、配布パッケージ
+- ✅ ~~コンパニオン側ツール選別 UI~~ → **T11 landed: `a108538`/`2eb6249`（10 名前空間チェックボックス、Anthropic 呼び出し前フィルタ、CDP 実機テスト済み）**
+- ❌ コンパニオン側：ストリーミング（T12）、配布パッケージ（T13）
 
 ### 3.3 設計済みだが未着手
 - **ターン制ロック・モデル（fix_plan v2 §5）**：人間と LLM の編集を排他、自動 snapshot、リース／奪取
@@ -428,12 +430,17 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 **複雑度**：S
 
-### T11: コンパニオン — ツール選別 UI
-**何故**：96 全ツール送信は Anthropic side で system トークン消費大。
+### T11: コンパニオン — ツール選別 UI ✅ 完了
 
-**どこ**：`renderer.js`、設定ダイアログにカテゴリ別 on/off チェックボックス追加。
+**Status: ✅ landed `a108538` + `2eb6249`（10 名前空間チェックボックス UI、CDP 実機テスト済み）**
 
-**複雑度**：S
+**何故**：100 全ツール送信は Anthropic side で system トークン消費大。
+
+**どこ**：`renderer.js:251–324`（`NAMESPACE_MAP`、`filterToolsByNamespaces()`、`renderToolsSection()`）、`styles.css:571–603`（`.tools-checkbox-grid`、`#settings-form .tool-ns-checkbox`）、`index.html`（Tools セクション HTML）。
+
+**実装概要**：設定ダイアログに 10 名前空間（Transport/Track/Regions/Markers/Session/Plugins/Automation/MIDI/Buses/Diagnostics）のチェックボックス一覧を追加。Save 時に `settings.enabledNamespaces` として永続化。`AgentLoop._getTools()` で `filterToolsByNamespaces()` を適用し Anthropic API 呼び出し前にフィルタ。disable-all フォールバック（全外しの場合は全ツール送信して警告表示）。CDP 実機テストで 10 チェックボックス・All/None ボタン・"(connect first)" カウント表示を確認済み。
+
+**複雑度**：S（完了）
 
 ### T12: コンパニオン — ストリーミング応答
 **どこ**：`main.js` の IPC ハンドラを `client.messages.stream()` 経由に切替、chunk を renderer に IPC 通知。
@@ -459,7 +466,7 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 4. **T4**（テンポ / 拍子編集）— 可変テンポ楽曲の LLM 駆動に必須 ← **現在の次優先候補**
 5. **T5**（フェード / クロスフェード）— リージョン制作の基本
 6. **T9 + T10**（ターン制ロック / バッチ）でエージェント編集の安全性を確立
-7. **T11**（コンパニオン ツール選別 UI）— T1+T2+T3 で 100 tools になったためトークン節約が重要
+7. ~~**T11**（コンパニオン ツール選別 UI）~~ ✅ **landed `a108538`/`2eb6249`** — T1+T2+T3 で 100 tools になったためトークン節約、CDP 実機テスト済み
 8. T6〜T8 を機会的に
 9. T12〜T13 でコンパニオンを実用品に
 10. T14 で外部利用解放
@@ -641,7 +648,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 リポ                              ブランチ                  状態
 masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、T1(export)完、T3(SSE)完、T2(automation)完 — 4 波 landed
-masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polish 余地あり
+masatomoota/ardour-mcp-chat     main                     UI 堅牢化完、T11 ツール選別 UI 完、CDP 実機テスト済み
 ```
 
 ---
@@ -674,7 +681,7 @@ masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polis
 - Ardour 解析起点：`b25a63c74a` (v9.7-88-gb25a63c74a)
 - Ardour fork commits：`0834ec2610`（Wave 0 build）→ `36b0f04fb0`（Wave 1a hardening）→ `5129c6d773`（Wave 1b meter）→ `2ea50d0292`（Wave 3 handoff）→ `458f99a63b`（gitignore .env）→ `19853971f0`（Wave T1 export_audio）→ `43f4848f09`（Wave T3 SSE GET /events）→ `ee8ffb10fd`（Wave T2 automation tools）
 - Audacity 解析起点：`caa9b9fdc` (4.0.0-alpha)
-- Companion commits：`617771e`（initial v0.1.0、squashed clean）→ `7281b11`（HANDOFF）
+- Companion commits：`617771e`（initial v0.1.0、squashed clean）→ `7281b11`（HANDOFF）→ `a108538`（UI 堅牢化 + T11 ツール選別 UI）→ `2eb6249`（T11 チェックボックスレイアウト修正）
 - 全作業 macOS Mac mini M4、Apple clang 17、Homebrew 6.0.3、Python 3.9.6
 
 ---
@@ -811,8 +818,11 @@ CLA（Contributor License Agreement）は**上流への PR を出す場合のみ
 
 ### 13.12 Companion（ardour-mcp-chat）— 重要実装事実
 
+**T11 ツール選別 UI 完了（Wave Companion-UI）**
+`a108538` + `2eb6249` で landing。`renderer.js:251–324` に `NAMESPACE_MAP`（10 名前空間）と `filterToolsByNamespaces()` 関数が追加され、`AgentLoop._getTools()` 内で Anthropic 呼び出し前にフィルタが適用される。設定に永続化。CDP 実機テストで動作確認済み。
+
 **`max_tokens: 4096` の制約（HANDOFF.md §2.2, §7.3）**
-Anthropic SDK 呼び出し時の `max_tokens` は現在 4096 固定。プラグイン一覧 dump 等で応答が途中で切れる可能性がある（既知制限）。設定可能化（UI 上で変更できる値）は将来の改善項目。T11（ツール選別 UI）と合わせて対応を検討。
+Anthropic SDK 呼び出し時の `max_tokens` は現在 4096 固定。プラグイン一覧 dump 等で応答が途中で切れる可能性がある（既知制限）。設定可能化（UI 上で変更できる値）は将来の改善項目。T11（ツール選別 UI）により選択したカテゴリのみ送信できるようになったため、100 ツール全送信のトークン問題は緩和。
 
 **`rate_limit_error` 自動再試行（HANDOFF.md §7.2）**
 `lib/agent-loop.js` は `rate_limit_error` / `overloaded_error` を検出して 1 回だけ自動再試行する（指数バックオフ簡易版）。これは既実装。§9.3 の「ループ無限化のリスク」表に記載がないが、iteration cap とは独立して動作する。
@@ -1005,6 +1015,54 @@ Date:   Fri Jun 26 13:49:07 2026 +0900
 - **T4（テンポ / 拍子編集）**：可変テンポ楽曲。`tempo/add`・`tempo/change`・`meter/set`。`TempoMap::write_copy()` → 編集 → `update()`（`libs/temporal/temporal/tempo.h:785-841`）。依存なし。
 - **T5（フェード / クロスフェード）**：`region/set_fade_in`・`region/set_fade_out`。`AudioRegion::set_fade_in_length`・`set_fade_in_shape`。S〜M 複雑度。
 - **T9（ターン制ロック）**：fix_plan v2 §5 設計済み。多段編集の原子性。`acquire_turn`・`release_turn`・`get_lock_state`、自動 `quick_snapshot`。M 複雑度。
-- **T11（コンパニオン ツール選別 UI）**：100 tools になったため system トークン消費が大。S 複雑度。
+- ~~**T11（コンパニオン ツール選別 UI）**~~ ✅ **landed** — 上記参照
 
-ユーザーの優先度が「DAW 機能の深さ」なら T4/T5、「エージェント安全性」なら T9、「コスト最適化」なら T11 が先。
+ユーザーの優先度が「DAW 機能の深さ」なら T4/T5、「エージェント安全性」なら T9、「Companion 体験」なら T12（ストリーミング）が先。
+
+---
+
+## §17. Wave Companion-UI 実行ログ（2026-06-26 セッション、T1/T2/T3 に続く同一セッション）
+
+### 17.1 何をしたか（1 段落サマリ）
+
+2026-06-26 の同一セッション内（T1/T2/T3 の Ardour 側実装波に続いて）、コンパニオン Electron アプリ（`masatomoota/ardour-mcp-chat`、`main` ブランチ）に対して「フォームバグ一括修正 + T11 ツール選別 UI 実装 + CDP 実機テスト」を実施した。並行監査で 7 件以上の表示クリップ・入力バグを発見して全修正。最重要修正は日本語 IME Enter 誤送信の防止（`renderer.js:836` に `!e.isComposing && e.keyCode !== 229` ガード追加）、設定ダイアログの高さ制御（最小ウィンドウ 560px でも Save ボタン到達可）、disabled 状態の `finally` ブロックへの移動。T11 ツール選別 UI は 10 名前空間のチェックボックスを Settings に追加し、Anthropic API 呼び出し前にツール配列をフィルタしてシステムプロンプトのトークン削減を実現。2 コミット（`a108538`、`2eb6249`）が `main` に landing し push 済み。
+
+### 17.2 変更ファイル
+
+```
+a108538: 5 files changed, 241 insertions(+), 39 deletions(-)
+  index.html  |  13 +++++
+  lib/ui.js   |   3 --
+  main.js     |   2 +
+  renderer.js | 173 ++++++++++++++++++++++++++++++
+  styles.css  |  89 ++++++++++++++++++++++++++++--
+
+2eb6249: 1 file changed, 5 insertions(+), 1 deletion(-)
+  styles.css  |   6 +++++-
+```
+
+### 17.3 CDP 実機テストの手法
+
+コンパニオンアプリを `--remote-debugging-port=9222` オプション付きで起動し、Chrome DevTools Protocol の `Runtime.evaluate` メソッドで**動作中の Electron レンダラ内に直接 JavaScript アサーションを投入**した。静的解析やスクリーンショット目視ではなく、実際のイベントハンドラに合成 `KeyboardEvent` を dispatch して `defaultPrevented` を確認する手法。ショートウィンドウテストは `Emulation.setDeviceMetricsOverride` で `1200x560`（強制最小高さ）に設定して実施。
+
+### 17.4 主要テスト結果（verbatim）
+
+**IME ガード（実ハンドラ上で確認）:**
+- 通常 Enter → `defaultPrevented=true` → **SEND ✅**
+- IME 変換中 Enter（`isComposing:true, keyCode:229`） → `defaultPrevented=false` → **NO SEND ✅（FIX WORKS）**
+- Shift+Enter → `defaultPrevented=false` → **NO SEND ✅**（改行）
+
+**ダイアログ高さ（1200x768 通常ウィンドウ）:**
+- `maxHeight: "691.2px"` (=90vh)、`fitsViewport: true`、Save ボタン `bottom=528`（到達可）
+
+**ダイアログ高さ（1200x560 最小ウィンドウ）:**
+- `maxHeight: "504px"` (=90vh of 560px)、form `scrollHeight 488 > clientHeight 444`（スクロール可）、Save ボタン `bottom=483`（スクロール後到達可）
+- **修正前は Save ボタンが画面外（到達不能）**
+
+**T11 チェックボックスレイアウト（2eb6249 適用後）:**
+- `flex-direction: row`、`text-transform: none`、チェックボックスとカウントが同一行、`"Transport (0)"` 正常表示
+
+### 17.5 未実施項目（アウトスタンディング）
+
+- **Ardour エンドツーエンド確認未実施**: T1 export / T2 automation / T3 SSE ツールをコンパニオンのチャット経由で実際に呼び出す end-to-end テストは次回 Ardour 起動時に実施。
+- 詳細な bug リスト・設計・チートシートは `SESSION_2026-06-26_T11_COMPANION_UI.md` 参照。
