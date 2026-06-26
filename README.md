@@ -37,8 +37,9 @@
 | **ミックス (Mix)** | フェーダ・パン・センド・**オートメーション** | **致命的欠落**: 瞬時値は OK、時間軸オートメーション ZERO | オートメーション必須 |
 | **エフェクト (FX)** | プラグイン追加・パラメータ・プリセット・サイドチェイン | 中（add/param OK、プリセット・サイドチェイン無し） | プリセット + Nyquist 生成 DSP |
 | **納品 (Deliver)** | export / bounce / stem / render | **MVP（WAV/PCM、ブロッキング）**: `session/export_audio` 実装済（Wave T1） | FLAC/MP3・非同期・ステム |
+| **知覚 (Perceive)** | SSE push / 状態変化通知 | **MVP 完了（Wave T3）**: `GET /events` で `notifications/transport` をストリーミング | meter / position / route_changed 拡張 |
 
-→ **「100%」到達には少なくとも (a) 納品ツール群、(b) オートメーション曲線編集、(c) リアルタイム知覚通知**の3つが要る（§7 のT1〜T3に対応）。T1 は Wave T1（`19853971f0`）で MVP 実装済み。
+→ **「100%」到達には少なくとも (a) 納品ツール群、(b) オートメーション曲線編集、(c) リアルタイム知覚通知**の3つが要る（§7 のT1〜T3に対応）。T1 は Wave T1（`19853971f0`）で MVP 実装済み。T3 は Wave T3（`43f4848f0979bd83371aec31252cbd43011bba2b`）で MVP 実装済み（`notifications/transport` のみ；meter / position は未実装）。
 
 ### 1.3 「100%」を阻む隠れた要件
 - **トランザクション境界**：エージェント1ターン＝1 Undo にまとめないと、エージェントの仕事が部分的に巻き戻せない
@@ -102,11 +103,12 @@
 - ✅ `track/get_meter` ツール → master bus の `peak_meter()->meter_level(n, MeterPeak)` を dBFS で返す
 - ✅ Electron コンパニオンアプリ：ビルド成功、SDK 解決、MCP クライアント単体テスト OK、Electron 起動 OK
 - ✅ `session/export_audio` ツール（Wave T1、commit `19853971f07f6f81413b55a298487e5574efa98c`）：マスターバスを WAV ファイルにエクスポート、フリーホイールブロッキングモード、start/length 範囲指定、stereo/mono 選択対応。ツール数 96 → 97。
+- ✅ SSE `GET /events` エンドポイント（Wave T3、commit `43f4848f0979bd83371aec31252cbd43011bba2b`）：`notifications/transport` イベントを Server-Sent Events でストリーミング配信。play/stop/record/loop 各状態変化を JSON-RPC notification 形式で push。ハートビート 15 秒間隔。Host ヘッダ検証適用。**知覚ループ MVP 完了**。
 
 ### 3.2 取り組まれていない（次の作業対象）
 - ✅ ~~納品系（export / bounce / stem）~~ → **T1 landed: `19853971f07f6f81413b55a298487e5574efa98c`（MVP: WAV blocking）**、FLAC/MP3・非同期・ステムは未実装
 - ❌ オートメーション曲線編集 → **T2**
-- ❌ サーバ起点の状態通知（SSE / `notifications/*`）→ **T3**
+- ✅ ~~サーバ起点の状態通知（SSE / `notifications/*`）~~ → **T3 landed: `43f4848f0979bd83371aec31252cbd43011bba2b`（MVP: transport-only）**。meter / position / route_changed / per-client filter は未実装
 - ❌ テンポ／拍子編集
 - ❌ フェード・クロスフェード制御
 - ❌ VCA / グループ / サイドチェイン
@@ -345,21 +347,25 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 **依存**：なし
 
 ### T3: SSE / `notifications/*` — 知覚ループの本格化
-**何故**：今は polling のみ。LLM がユーザのフェーダ移動や再生位置進行を perceive するためにはサーバ起点の push が要る。
 
-**どこ**：
-- `libs/surfaces/mcp_http/mcp_http_server.cc` — 新エンドポイント `GET /events`（Server-Sent Events）を `handle_http` に追加
-- `lws_callback_on_writable` の繰り返しで `data: ...\n\n` を流す
-- subscribed clients を管理（複数同時接続）
-- PBD signal connection: `Session::PositionChanged`, `Route::gain_control()->Changed`, etc.
+**Status: ✅ landed `43f4848f0979bd83371aec31252cbd43011bba2b`（MVP: transport-only SSE）**
 
-**似た既存実装**：`libs/surfaces/websockets/feedback.cc` の `update_all_clients`、`libs/surfaces/osc/osc_route_observer.cc:159` の `Changed.connect`。
+**実装概要**：`mcp_http_server.cc:3251-3280` で `GET /events` パスを既存 `handle_http` に追加。`send_sse_headers()`（`:3385`）が `text/event-stream` ヘッダを送信し、`SseSubscriber` を `_sse_subscribers` リスト（`_sse_subscribers_mutex` 保護）に登録。`connect_transport_signals()`（`:3506`）が `Session::TransportStateChange` と `Session::RecordStateChanged` を `_event_loop` マーシャル付きで接続。シグナル発火 → `on_transport_state_changed()`（`:3497`） → `build_transport_event()`（`:3428`）でペイロード構築 → `broadcast_sse()`（`:3456`）で全サブスクライバーの `sse_queue` に push → `lws_callback_on_writable()` でドレイン。ハートビート 15 秒。Host チェック適用（loopback 以外 403）。
 
-**完成条件**：Companion app が playhead を 100ms 精度で表示できる（再生中の live tracking）
+**残課題（MVP 外）**：
+- `notifications/meter`（10Hz ポーリング、`Route::peak_meter()->meter_level()` 使用）
+- `notifications/position`（再生中 100ms ポーリング）
+- `notifications/route_changed`（ルート追加/削除）
+- per-client フィルタ（購読するイベント種別の指定）
+- subscriber 0 時のシグナル切断最適化
+- Companion app 側の SSE 受信 UI（現状は curl で確認）
 
-**複雑度**：L（lws の writeable 駆動、subscriber 管理、PBD signal life cycle）
+**完了実績**：
+- static 検証通過（errors=0, warnings=2, dylib string table に `text/event-stream` / `notifications/transport` / `/events` の 3 文字列存在確認）
+- シンボル確認：`broadcast_sse`（T = global exported）、`on_transport_state_changed`（T = global exported）
+- live テストは Ardour 未起動のため未実施（次回起動時に §3.9b のパターンで確認）
 
-**依存**：なし
+**複雑度**：L（完了）
 
 ### T4: テンポマップ / 拍子編集
 **何故**：可変テンポ・拍子変更を持つ楽曲を LLM 駆動で扱うのに必須。
@@ -442,8 +448,8 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 ### 推奨着手順
 1. ~~**まず T1**（納品口を開ける）~~ ✅ **Landing 済み** (`19853971f0`, WAV MVP)
-2. **次に T2**（オートメーション）— ミックスが本当に動かせる
-3. **そして T3**（SSE）— LLM が perceiving できる＋`session/export_audio` の非同期化にも必要
+2. ~~**次に T2**（オートメーション）— ミックスが本当に動かせる~~ ← **現在の最優先（T1 / T3 完了後）**
+3. ~~**そして T3**（SSE）— LLM が perceiving できる＋`session/export_audio` の非同期化にも必要~~ ✅ **Landing 済み** (`43f4848f09`, transport-only MVP)
 4. T9 + T10（ターン制ロック / バッチ）でエージェント編集の安全性を確立
 5. T4〜T8 を機会的に
 6. T11〜T13 でコンパニオンを実用品に
@@ -618,14 +624,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ## §11. 5 分の TL;DR
 
 - **何を作っている？** — 言葉で操る DAW。Ardour 本体（GPLv2）+ Electron チャットアプリ（MIT）。
-- **どこまで出来てる？** — Ardour MCP サーバが**ハードニング済みで稼働**（97 tools / port 4820）、Electron コンパニオンが**ビルド済み**、両者が**ライブ疎通検証パス**。Wave T1 で `session/export_audio`（WAV MVP）実装済み。
-- **何が足りない？** — **オートメーション曲線（T2）** と **SSE 通知（T3）** がまだ致命的欠落。T1 は Landing 済み（WAV MVP）。これら（T2〜T3）が埋まれば実用 90%。
-- **何をすればいい？** — §8 の手順で環境再現 → §7 から T2（オートメーション）または T3（SSE）に着手。
+- **どこまで出来てる？** — Ardour MCP サーバが**ハードニング済みで稼働**（97 tools + 1 SSE endpoint / port 4820）、Electron コンパニオンが**ビルド済み**、両者が**ライブ疎通検証パス**。Wave T1 で `session/export_audio`（WAV MVP）、Wave T3 で `GET /events` SSE（transport-only MVP）実装済み。
+- **何が足りない？** — **オートメーション曲線（T2）** が最優先の致命的欠落。T1・T3 は Landing 済み。T2 が埋まれば実用 90%。
+- **何をすればいい？** — §8 の手順で環境再現 → §7 から T2（オートメーション）に着手。
 - **どこにある？** — 2 repos（アクティブ作業対象）：`masatomoota/{ardour, ardour-mcp-chat}`。各 repo に専用 HANDOFF.md。本書はそれら横断のメタ文書。
 
 ```
 リポ                              ブランチ                  状態
-masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、T1(export)完、T2/T3未
+masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、T1(export)完、T3(SSE)完、T2未
 masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polish 余地あり
 ```
 
@@ -657,7 +663,7 @@ masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polis
 
 ### 12.4 来歴・検証メタデータ
 - Ardour 解析起点：`b25a63c74a` (v9.7-88-gb25a63c74a)
-- Ardour fork commits：`0834ec2610`（Wave 0 build）→ `36b0f04fb0`（Wave 1a hardening）→ `5129c6d773`（Wave 1b meter）→ `2ea50d0292`（Wave 3 handoff）→ `458f99a63b`（gitignore .env）→ `19853971f0`（Wave T1 export_audio）
+- Ardour fork commits：`0834ec2610`（Wave 0 build）→ `36b0f04fb0`（Wave 1a hardening）→ `5129c6d773`（Wave 1b meter）→ `2ea50d0292`（Wave 3 handoff）→ `458f99a63b`（gitignore .env）→ `19853971f0`（Wave T1 export_audio）→ `43f4848f09`（Wave T3 SSE GET /events）
 - Audacity 解析起点：`caa9b9fdc` (4.0.0-alpha)
 - Companion commits：`617771e`（initial v0.1.0、squashed clean）→ `7281b11`（HANDOFF）
 - 全作業 macOS Mac mini M4、Apple clang 17、Homebrew 6.0.3、Python 3.9.6
@@ -861,4 +867,59 @@ Date:   Fri Jun 26 10:52:10 2026 +0900
 - **T2 先行**：`automation/get_lane`, `automation/set_curve`, `automation/set_mode` を実装。`ControlList` の点列 API（`libs/evoral/ControlList.h:158-222`）が中核。実装したその日からフェードイン・自動パン・ダイナミック EQ が可能になる。
 - **T3 先行**：`GET /events` SSE エンドポイントを追加。`lws_callback_on_writable` で `data: ...\n\n` を流す。既存 97 ツール全ての効果が即座に perceivable になる（「ツールを呼んだが本当に変わったか」を LLM が能動的に確認できる）。さらに `session/export_audio` の非同期化も解禁する。
 
-マスターハンドオフ §7 の推奨順：**T2 → T3**。per-repo ハンドオフ §11.2 の著者推奨：**T3 → T2**。ユーザー判断による。
+マスターハンドオフ §7 の推奨順：**T2 → T3**。per-repo ハンドオフ §11.2 の著者推奨：**T3 → T2**。本セッションでは T3 が先に実装された（Wave T3 実行ログは §15 参照）。次は T2 が最優先。
+
+---
+
+## §15. Wave T3 実行ログ（2026-06-26 セッション、T1 に続く同一セッション）
+
+### 15.1 何をしたか（1 段落サマリ）
+
+2026-06-26 の同一セッション内（T1 実装直後）に、マスターハンドオフ §7 の T3「SSE / `notifications/*` — 知覚ループの本格化」MVP を実装した。`libs/surfaces/mcp_http/mcp_http_server.cc` に 280 行を追加し、`mcp_http_server.h` に 33 行を追加した（合計 313 行追加、4 行変更）。`GET /events` エンドポイントを既存 `handle_http` のパスベースディスパッチとして追加し、`Session::TransportStateChange` / `RecordStateChanged` PBD シグナルを `notifications/transport` JSON-RPC notification に変換して SSE ストリームで配信する。ビルドは errors=0 / warnings=2（iterations=3）で成功。dylib string table に 3 つの必須文字列が確認され、`broadcast_sse` と `on_transport_state_changed` がエクスポートシンボルとして確認済み。commit `43f4848f0979bd83371aec31252cbd43011bba2b` として `feature/mcp-fresh-macos` ブランチに push 済み。
+
+### 15.2 変更ファイル（git show --stat）
+
+```
+commit 43f4848f0979bd83371aec31252cbd43011bba2b
+Author: masatomoota <129290880+masatomoota@users.noreply.github.com>
+Date:   Fri Jun 26 13:12:52 2026 +0900
+
+    mcp_http: add SSE GET /events + notifications/transport (T3 MVP)
+
+ libs/surfaces/mcp_http/mcp_http_server.cc | 284 +++++++++++++++++++++++++++++-
+ libs/surfaces/mcp_http/mcp_http_server.h  |  33 ++++
+ 2 files changed, 313 insertions(+), 4 deletions(-)
+```
+
+### 15.3 設計判断の根拠
+
+**パスベースディスパッチを既存 `handle_http` に追加した理由**：別の `lws_protocols` エントリを追加する選択肢もあったが、既存 `handle_http` の冒頭に `path == "/events"` 分岐を追加する方が最小侵入度。lws は同一コンテキストで GET と POST を区別するので `POST /mcp` との干渉なし。
+
+**per-subscriber キュー（`std::deque`）+ mutex にした理由**：`lws_write()` は lws サービススレッド上でのみ呼べる。GUI スレッドからの `broadcast_sse()` で直接 `lws_write()` を呼ぶのはスレッド安全でない。キューに積んで `lws_callback_on_writable()` / `lws_cancel_service()` で lws スレッドを起こし、`handle_http_writeable` で安全にドレインする設計が lws の推奨パターン。
+
+**ハートビート 15 秒にした理由**：RFC 6202 では「接続維持のために定期的なコメントを送ること」を推奨。HTTP プロキシやロードバランサーがデフォルトで 30〜60 秒でアイドル接続を切断するため、15 秒の SSE コメント行（`: heartbeat\n\n`）で余裕を持って維持。
+
+**トランスポートのみ（meter / position 省略）にした理由**：meter は 10Hz のポーリングループが必要（タイマー追加）、position は再生中のみのポーリング（状態機械追加）となり、scope が倍増する。MVP の目標は「SSE の配管が正しく動くことを確認する」であり、transport state edge event だけで構造全体の検証が可能。
+
+**`_event_loop` 引数付きの `PBD::Signal::connect()` にした理由**：`TransportStateChange` は RT オーディオスレッドや butler スレッドから発火する可能性がある。lws が許容する `lws_callback_on_writable()` のクロススレッド呼び出しは atomic フラグベースで安全だが、`build_transport_event()` で `_session.transport_rolling()` 等を呼ぶには GUI/event_loop スレッドでの実行が必要。`connect()` の第 4 引数に `_event_loop` を渡すことでシグナルハンドラが必ず GUI スレッドにマーシャルされる（既存の `tools/call` マーシャルと同じ機構）。
+
+### 15.4 オープンアイテム
+
+1. **ライブ curl 検証未実施**：Ardour を起動して `GET /events` に接続し、再生ボタンで `notifications/transport` イベントが届くことを確認する（次回 Ardour 起動時）。
+2. **`notifications/meter`**：10Hz タイマーで全ルートのピーク値を push。`Route::peak_meter()->meter_level(n, MeterPeak)` を使用（Wave 1b `track/get_meter` と同 API）。
+3. **`notifications/position`**：再生中 100ms ごとに `transport_sample()` を push。
+4. **`notifications/route_changed`**：`Session::RouteAdded` / `RouteRemoved` シグナル接続で追加/削除通知。
+5. **per-client フィルタ**：`GET /events?types=transport,meter` 形式でクエリパラメータを解析し、購読イベント種別を絞り込む。
+6. **Companion app 側 SSE 受信 UI**：`EventSource` API で `GET /events` を購読し、playhead 位置や meter レベルを UI に表示。
+
+### 15.5 推奨次波
+
+**T2（オートメーション曲線編集）が最優先**。T1（納品）と T3（知覚）が完了したので、ミックスの本質である時間軸操作（フェードイン・自動パン・ダイナミック EQ）を解禁するオートメーション曲線が次の差別化インパクト。
+
+- `automation/get_lane(routeId, paramId)` → `ControlList` の点列を返す
+- `automation/set_curve(routeId, paramId, points, mode=replace|merge)` → `ControlList::add` 一括呼び出し
+- `automation/set_mode(routeId, paramId, off|read|touch|write|latch)` → `AutomationControl::set_automation_state`
+
+中核：`libs/evoral/ControlList.h:158-222`、`libs/ardour/ardour/automation_control.h`。
+
+**SSE 容易な follow-up**（T3 拡張）：上記 §15.4 の meter / position 通知は `connect_transport_signals()` パターンを踏襲するだけで追加可能。ローリスクで knowledge loop をさらに強化できる。
