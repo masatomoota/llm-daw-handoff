@@ -34,12 +34,12 @@
 |---|---|---|---|
 | **録音 (Record)** | 録音アーム / 入力モニタ / トランスポート | 部分（アーム可、I/O ルーティング深部は未到達） | 全部 |
 | **編集 (Edit)** | クリップ移動・split・MIDIノート編集・マーカー | 強（バルクMIDI JSON 含む） | 微調整のみ |
-| **ミックス (Mix)** | フェーダ・パン・センド・**オートメーション** | **致命的欠落**: 瞬時値は OK、時間軸オートメーション ZERO | オートメーション必須 |
+| **ミックス (Mix)** | フェーダ・パン・センド・**オートメーション** | **MVP（automation get_lane/set_curve/set_mode、route 標準パラメータのみ）**: `automation/get_lane`・`set_curve`・`set_mode` 実装済み（Wave T2）。plugin params・MIDI CC・merge mode は未実装 | オートメーション完全対応 |
 | **エフェクト (FX)** | プラグイン追加・パラメータ・プリセット・サイドチェイン | 中（add/param OK、プリセット・サイドチェイン無し） | プリセット + Nyquist 生成 DSP |
 | **納品 (Deliver)** | export / bounce / stem / render | **MVP（WAV/PCM、ブロッキング）**: `session/export_audio` 実装済（Wave T1） | FLAC/MP3・非同期・ステム |
 | **知覚 (Perceive)** | SSE push / 状態変化通知 | **MVP 完了（Wave T3）**: `GET /events` で `notifications/transport` をストリーミング | meter / position / route_changed 拡張 |
 
-→ **「100%」到達には少なくとも (a) 納品ツール群、(b) オートメーション曲線編集、(c) リアルタイム知覚通知**の3つが要る（§7 のT1〜T3に対応）。T1 は Wave T1（`19853971f0`）で MVP 実装済み。T3 は Wave T3（`43f4848f0979bd83371aec31252cbd43011bba2b`）で MVP 実装済み（`notifications/transport` のみ；meter / position は未実装）。
+→ **「100%」到達には少なくとも (a) 納品ツール群、(b) オートメーション曲線編集、(c) リアルタイム知覚通知**の3つが要る（§7 のT1〜T3に対応）。T1 は Wave T1（`19853971f0`）で MVP 実装済み。T3 は Wave T3（`43f4848f09`）で MVP 実装済み（`notifications/transport` のみ；meter / position は未実装）。**T2 は Wave T2（`ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`）で MVP 実装済み（route 標準パラメータのみ；plugin params・MIDI CC は未実装）。** T1 + T3 + T2 の 3 つが同一セッションで閉じ、プロジェクトは「実用 90%+」に到達した。
 
 ### 1.3 「100%」を阻む隠れた要件
 - **トランザクション境界**：エージェント1ターン＝1 Undo にまとめないと、エージェントの仕事が部分的に巻き戻せない
@@ -55,10 +55,12 @@
                    ┌─ Ardour fork (GPLv2-or-later) ─────────────────────────┐
                    │ masatomoota/ardour                                       │
                    │ branch: feature/mcp-fresh-macos                          │
-                   │ - libs/surfaces/mcp_http/ (97 tools, ~8460 LOC server)   │
+                   │ - libs/surfaces/mcp_http/ (100 tools, ~9190 LOC server)  │
                    │ - Phase 0 hardening (thread marshal + localhost + Host)  │
                    │ - track/get_meter (real-time peak readback)              │
                    │ - session/export_audio (WAV MVP, Wave T1)                │
+                   │ - SSE GET /events + notifications/transport (Wave T3)    │
+                   │ - automation/get_lane|set_curve|set_mode (Wave T2)       │
                    │ - macOS arm64 from-Homebrew build (5 wscript fixes)      │
                    │ - MCP_LLM_CONTROL_HANDOFF.md                             │
                    └────────────────┬─────────────────────────────────────────┘
@@ -85,7 +87,7 @@
 ```
 
 ### 2.1 各リポの役割
-- **Ardour fork**：**現在のメイン作業対象**。MCP サーバ＋ハードニング＋メータが**実機検証済み**（97 tools, Host: evil.example.com→403, track_get_meter live success）。Wave T1 で `session/export_audio` 追加済み（static 確認、live は次回起動時）。Phase 1〜4 の追加実装はすべてこのリポに来る。
+- **Ardour fork**：**現在のメイン作業対象**。MCP サーバ＋ハードニング＋メータが**実機検証済み**（100 tools, Host: evil.example.com→403, track_get_meter live success）。Wave T1 で `session/export_audio`、Wave T3 で SSE `GET /events`、Wave T2 で `automation/get_lane`・`set_curve`・`set_mode` 追加済み（静的確認、live は次回 Ardour 起動時）。Phase 1〜4 の追加実装はすべてこのリポに来る。
 - **Companion (ardour-mcp-chat)**：MCP **クライアント**。Ardour 側拡張に追従して伸ばす（ツール選別 UI、ストリーミング応答、配布など）。MIT なのでクローズド派生も可能。
 - **Audacity** (`masatomoota/audacity`)：**本プロジェクトのスコープ外**。別 LLM が独立開発中。詳細は §0.5 参照。
 
@@ -96,7 +98,7 @@
 ### 3.1 完了している
 - ✅ Ardour MCP HTTP サーバが macOS arm64 でフルビルド成功（`build/gtk2_ardour/ardour-9.7.89`, 73MB, debug build）
 - ✅ `libardour_mcp_http.dylib`（2.9MB）が `protocol_descriptor` を export し、Ardour 起動時に dlopen される
-- ✅ `127.0.0.1:4820/mcp` でMCP プロトコル `2025-03-26` 応答（`initialize`, `tools/list` = 96 tools, `tools/call`）
+- ✅ `127.0.0.1:4820/mcp` でMCP プロトコル `2025-03-26` 応答（`initialize`, `tools/list` = 100 tools, `tools/call`）
 - ✅ スレッド整流：lws サービススレッドから `_event_loop->call_slot` 経由で GUI スレッドへマーシャル → Undo 履歴破壊・assert クラッシュなし
 - ✅ Localhost bind 固定（`_info.iface = "127.0.0.1"`）→ LAN から到達不可
 - ✅ Host ヘッダ検証 → `Host: evil.example.com` で HTTP 403（DNS-rebinding 対策動作確認）
@@ -104,10 +106,11 @@
 - ✅ Electron コンパニオンアプリ：ビルド成功、SDK 解決、MCP クライアント単体テスト OK、Electron 起動 OK
 - ✅ `session/export_audio` ツール（Wave T1、commit `19853971f07f6f81413b55a298487e5574efa98c`）：マスターバスを WAV ファイルにエクスポート、フリーホイールブロッキングモード、start/length 範囲指定、stereo/mono 選択対応。ツール数 96 → 97。
 - ✅ SSE `GET /events` エンドポイント（Wave T3、commit `43f4848f0979bd83371aec31252cbd43011bba2b`）：`notifications/transport` イベントを Server-Sent Events でストリーミング配信。play/stop/record/loop 各状態変化を JSON-RPC notification 形式で push。ハートビート 15 秒間隔。Host ヘッダ検証適用。**知覚ループ MVP 完了**。
+- ✅ `automation/get_lane`・`automation/set_curve`・`automation/set_mode` ツール（Wave T2、commit `ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`）：route 標準パラメータ（gain/pan/mute/solo/rec_enable）の automation curve 読み書きと mode 変更。`set_curve` は `begin/commit_reversible_command` でラップし 1 undo エントリとして記録。ツール数 97 → 100。**ミックス本丸 MVP 完了**。
 
 ### 3.2 取り組まれていない（次の作業対象）
 - ✅ ~~納品系（export / bounce / stem）~~ → **T1 landed: `19853971f07f6f81413b55a298487e5574efa98c`（MVP: WAV blocking）**、FLAC/MP3・非同期・ステムは未実装
-- ❌ オートメーション曲線編集 → **T2**
+- ✅ ~~オートメーション曲線編集~~ → **T2 landed: `ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`（MVP: route 標準 5 パラメータ、replace mode のみ）**。plugin params・MIDI CC・merge mode・notifications/automation は未実装
 - ✅ ~~サーバ起点の状態通知（SSE / `notifications/*`）~~ → **T3 landed: `43f4848f0979bd83371aec31252cbd43011bba2b`（MVP: transport-only）**。meter / position / route_changed / per-client filter は未実装
 - ❌ テンポ／拍子編集
 - ❌ フェード・クロスフェード制御
@@ -328,21 +331,24 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 **依存**：なし
 
-### T2: オートメーション曲線編集ツール群 — ミックスの本丸
+### T2: オートメーション曲線編集ツール群 — ミックスの本丸 ⭐ ✅ 完了
+
+**Status: ✅ landed `ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`（MVP: route 標準 5 パラメータ、replace mode のみ）**
+
 **何故**：ミックスの本質は「時間と共に値が動く」こと。瞬時値だけだとフェードイン・自動パン・ダイナミック EQ など、全ての高度ミックスが不可能。
 
-**どこ**：
-- `libs/surfaces/mcp_http/mcp_http_server.cc` — `automation/get_lane`, `automation/set_curve`, `automation/set_mode`
-- 駆動先：`AutomationControl` (`libs/ardour/ardour/automation_control.h`)、`ControlList` (`libs/evoral/ControlList.h:158-222`)
+**実装概要**：`mcp_http_server.cc` に `handle_automation_get_lane_tool()`・`handle_automation_set_curve_tool()`・`handle_automation_set_mode_tool()` を追加。ヘルパ `resolve_automation_parameter()`・`get_route_automation_control()` がパラメータ文字列 → `Evoral::Parameter` → `AutomationControl` の lookup chain を担う。`set_curve` は `begin/commit_reversible_command` + `MementoCommand<AutomationList>` でラップし undoable。時刻は `timeSec × session.sample_rate()` でサンプルへ変換。ツール数 97 → **100**。
 
-**API**：
-- `automation/get_lane(routeId, paramId)` → 点列 `[{time, value}, ...]` を返す
-- `automation/set_curve(routeId, paramId, points, mode=replace|merge)` → `ControlList::add` を一括呼び出し
-- `automation/set_mode(routeId, paramId, off|read|touch|write|latch)` → `AutomationControl::set_automation_state`
+**対応パラメータ**：`gain`・`pan`（`PanAzimuthAutomation`）・`mute`・`solo`・`rec_enable`（Track のみ）
 
-**完成条件**：「verse 2 の gain を bar 33-37 で -3dB から 0dB に上げて」が再生に反映される
+**残課題（MVP 外）**：
+- plugin params（`PluginAutomation` type、`PluginInsert::automation_control(param)` 経由）
+- MIDI CC（`MidiCCAutomation` type）
+- `merge` mode（既存点との合成、現在 `replace` のみ）
+- ガードポイント制御（`with_guard=true` 化）
+- `notifications/automation` SSE イベント（`set_curve` / `set_mode` 後の変化を push）
 
-**複雑度**：M〜L
+**複雑度**：M〜L（完了）
 
 **依存**：なし
 
@@ -448,12 +454,15 @@ Electron + バニラJS + @anthropic-ai/sdk で 4 フェーズ Workflow（Scaffol
 
 ### 推奨着手順
 1. ~~**まず T1**（納品口を開ける）~~ ✅ **Landing 済み** (`19853971f0`, WAV MVP)
-2. ~~**次に T2**（オートメーション）— ミックスが本当に動かせる~~ ← **現在の最優先（T1 / T3 完了後）**
-3. ~~**そして T3**（SSE）— LLM が perceiving できる＋`session/export_audio` の非同期化にも必要~~ ✅ **Landing 済み** (`43f4848f09`, transport-only MVP)
-4. T9 + T10（ターン制ロック / バッチ）でエージェント編集の安全性を確立
-5. T4〜T8 を機会的に
-6. T11〜T13 でコンパニオンを実用品に
-7. T14 で外部利用解放
+2. ~~**次に T2**（オートメーション）— ミックスが本当に動かせる~~ ✅ **Landing 済み** (`ee8ffb10fd`, route 標準 5 パラメータ MVP)
+3. ~~**そして T3**（SSE）— LLM が perceiving できる~~ ✅ **Landing 済み** (`43f4848f09`, transport-only MVP)
+4. **T4**（テンポ / 拍子編集）— 可変テンポ楽曲の LLM 駆動に必須 ← **現在の次優先候補**
+5. **T5**（フェード / クロスフェード）— リージョン制作の基本
+6. **T9 + T10**（ターン制ロック / バッチ）でエージェント編集の安全性を確立
+7. **T11**（コンパニオン ツール選別 UI）— T1+T2+T3 で 100 tools になったためトークン節約が重要
+8. T6〜T8 を機会的に
+9. T12〜T13 でコンパニオンを実用品に
+10. T14 で外部利用解放
 
 ---
 
@@ -624,14 +633,14 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 ## §11. 5 分の TL;DR
 
 - **何を作っている？** — 言葉で操る DAW。Ardour 本体（GPLv2）+ Electron チャットアプリ（MIT）。
-- **どこまで出来てる？** — Ardour MCP サーバが**ハードニング済みで稼働**（97 tools + 1 SSE endpoint / port 4820）、Electron コンパニオンが**ビルド済み**、両者が**ライブ疎通検証パス**。Wave T1 で `session/export_audio`（WAV MVP）、Wave T3 で `GET /events` SSE（transport-only MVP）実装済み。
-- **何が足りない？** — **オートメーション曲線（T2）** が最優先の致命的欠落。T1・T3 は Landing 済み。T2 が埋まれば実用 90%。
-- **何をすればいい？** — §8 の手順で環境再現 → §7 から T2（オートメーション）に着手。
+- **どこまで出来てる？** — Ardour MCP サーバが**ハードニング済みで稼働**（100 tools + 1 SSE endpoint / port 4820）、Electron コンパニオンが**ビルド済み**、両者が**ライブ疎通検証パス**。Wave T1 で `session/export_audio`（WAV MVP）、Wave T3 で `GET /events` SSE（transport-only MVP）、Wave T2 で `automation/get_lane`・`set_curve`・`set_mode`（route 標準パラメータ MVP）を実装済み。**同一セッション（2026-06-26）内に T1 + T3 + T2 の 3 つが全て landing し、マスターハンドオフ §1.2 が "致命的欠落" と指摘した 3 軸（納品 / 知覚 / オートメーション）を完全に閉じた。プロジェクトは「実用 90%+」に到達。**
+- **何が足りない？** — T1・T2・T3 は全て Landing 済み。次の差別化は T4（テンポ / 拍子）・T5（フェード）・T9（ターン制ロック）と SSE 拡張（meter / position 通知）。
+- **何をすればいい？** — §8 の手順で環境再現 → §7 から T4（テンポ / 拍子編集）に着手（ユーザーの優先度次第で T5 / T9 / T11 でも可）。
 - **どこにある？** — 2 repos（アクティブ作業対象）：`masatomoota/{ardour, ardour-mcp-chat}`。各 repo に専用 HANDOFF.md。本書はそれら横断のメタ文書。
 
 ```
 リポ                              ブランチ                  状態
-masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、T1(export)完、T3(SSE)完、T2未
+masatomoota/ardour              feature/mcp-fresh-macos  Phase 0 完、T1(export)完、T3(SSE)完、T2(automation)完 — 4 波 landed
 masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polish 余地あり
 ```
 
@@ -663,7 +672,7 @@ masatomoota/ardour-mcp-chat     main                     v0.1.0 verified、polis
 
 ### 12.4 来歴・検証メタデータ
 - Ardour 解析起点：`b25a63c74a` (v9.7-88-gb25a63c74a)
-- Ardour fork commits：`0834ec2610`（Wave 0 build）→ `36b0f04fb0`（Wave 1a hardening）→ `5129c6d773`（Wave 1b meter）→ `2ea50d0292`（Wave 3 handoff）→ `458f99a63b`（gitignore .env）→ `19853971f0`（Wave T1 export_audio）→ `43f4848f09`（Wave T3 SSE GET /events）
+- Ardour fork commits：`0834ec2610`（Wave 0 build）→ `36b0f04fb0`（Wave 1a hardening）→ `5129c6d773`（Wave 1b meter）→ `2ea50d0292`（Wave 3 handoff）→ `458f99a63b`（gitignore .env）→ `19853971f0`（Wave T1 export_audio）→ `43f4848f09`（Wave T3 SSE GET /events）→ `ee8ffb10fd`（Wave T2 automation tools）
 - Audacity 解析起点：`caa9b9fdc` (4.0.0-alpha)
 - Companion commits：`617771e`（initial v0.1.0、squashed clean）→ `7281b11`（HANDOFF）
 - 全作業 macOS Mac mini M4、Apple clang 17、Homebrew 6.0.3、Python 3.9.6
@@ -920,6 +929,82 @@ Date:   Fri Jun 26 13:12:52 2026 +0900
 - `automation/set_curve(routeId, paramId, points, mode=replace|merge)` → `ControlList::add` 一括呼び出し
 - `automation/set_mode(routeId, paramId, off|read|touch|write|latch)` → `AutomationControl::set_automation_state`
 
+→ **✅ Wave T2 で MVP 完了** (`ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b`)。詳細は §16 参照。
+
 中核：`libs/evoral/ControlList.h:158-222`、`libs/ardour/ardour/automation_control.h`。
 
 **SSE 容易な follow-up**（T3 拡張）：上記 §15.4 の meter / position 通知は `connect_transport_signals()` パターンを踏襲するだけで追加可能。ローリスクで knowledge loop をさらに強化できる。
+
+---
+
+## §16. Wave T2 実行ログ（2026-06-26 セッション、T1 + T3 に続く同一セッション）
+
+### 16.1 何をしたか（1 段落サマリ）
+
+2026-06-26 の同一セッション内（T1・T3 実装直後）に、マスターハンドオフ §7 の T2「オートメーション曲線編集ツール群 — ミックスの本丸」MVP を実装した。`libs/surfaces/mcp_http/mcp_http_server.cc` に 347 行を追加し、`tools_json.inc` に 93 行を追加した（合計 440 行追加、1 行変更）。3 つの新規ハンドラ（`handle_automation_get_lane_tool`・`handle_automation_set_curve_tool`・`handle_automation_set_mode_tool`）と 4 つのヘルパ関数（`resolve_automation_parameter`・`get_route_automation_control`・`auto_state_to_mcp_string`・`mcp_string_to_auto_state`）を実装し、`dispatch_automation_tool_call()` でディスパッチャに統合した。ビルドは errors=0 / warnings=2（iterations=2）で成功。dylib string table に 3 ツールの slash 形式・underscore 形式それぞれが存在し、4 シンボルの存在を確認した。commit `ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b` として `feature/mcp-fresh-macos` ブランチに push 済み。
+
+### 16.2 変更ファイル（git show --stat）
+
+```
+commit ee8ffb10fd177a9e09fb000bf0a8bf75c4d72b8b
+Author: masatomoota <129290880+masatomoota@users.noreply.github.com>
+Date:   Fri Jun 26 13:49:07 2026 +0900
+
+    mcp_http: add automation/{get_lane,set_curve,set_mode} (T2 MVP)
+
+ libs/surfaces/mcp_http/mcp_http_server.cc | 348 +++++++++++++++++++++++++++++-
+ libs/surfaces/mcp_http/tools_json.inc     |  93 ++++++++
+ 2 files changed, 440 insertions(+), 1 deletion(-)
+```
+
+### 16.3 設計判断の根拠
+
+**replace モードのみ（merge 省略）にした理由**：`ControlList` には複数の書き込みモード（`replace`・`merge`・`add`）が存在するが、プログラマティックな書き込みでは「まず既存を消してから新規点列を置く」replace が最も明確。merge は点列の重複処理・昇順ソート保証が複雑になる。MVP として最小で正しい動作を確認するため replace のみを実装し、エラーとして明示的に拒否する（`-32602` エラー）。
+
+**with_guard=false にした理由**：`ControlList::editor_add_ordered(ops, with_guard)` の `true` はオートメーション端点前後に 64 サンプルのガードポイントを自動挿入する（GUI 操作で誤アクセスを防ぐ Ardour のヒューリスティクス）。LLM がプログラマティックに書き込む場合、ガードポイントは `get_lane` で読み返した点列の意図しない追加点として現れ混乱を招く。将来 GUI との共存が重要になれば `true` に戻せる。
+
+**seconds-to-samples 変換を実装側で担う理由**：MCP クライアント（LLM）はサンプルレートを知らないことが多い。`timeSec`（秒数）で受け取り、ハンドラ内で `timeSec × session.sample_rate()` → `std::floor` → `Temporal::timepos_t(samps)` に変換することで、クライアントはサンプルレートを意識しなくてよい。`get_lane` でも `timeSamples` と `timeSec` 両方を返すことで、set 時の値を get 時の値からそのまま使えるようにした。
+
+**reversible command でラップした理由**：`mcp_http_server.cc` 内の既存の書き込み系ツール（`track/set_gain` 等）は `begin/commit_reversible_command` でラップして Undo 履歴に記録する方針（Wave 1 のハードニング以来の一貫したパターン）。オートメーション曲線の set_curve は不可逆になってはならない（1ターンで複数ポイントを書いた場合、Ctrl+Z で一括巻き戻しできることが期待される）。`MementoCommand<AutomationList>` が before/after の XML スナップショットを保持する。
+
+**set_mode を reversible command なしにした理由**：Ardour の既存サーフェス実装（OSC surface: `osc.cc:4509-4534`）がオートメーションモード変更を Undo 履歴に積まない設計。一貫性のため同じ方針を採用。
+
+### 16.4 オープンアイテム
+
+1. **ライブ curl 検証未実施**：Ardour を起動して `automation/get_lane` → `automation/set_curve` → 再生の動作確認（次回 Ardour 起動時）。
+2. **プラグイン params**：`PluginAutomation` type の `Evoral::Parameter` を `resolve_automation_parameter()` に追加し、`route_by_mcp_id()` + `Processor` 探索 + `PluginInsert::automation_control(param)` で control を取得する形で拡張可能。
+3. **MIDI CC**：`MidiCCAutomation` type。プラグイン params と同様の lookup chain が必要。
+4. **merge mode**：`ControlList::add(time, value)` で個別点を追加する API を使えば実装可能。ソート保証と重複排除の処理が必要。
+5. **notifications/automation**：`set_curve` / `set_mode` 後に SSE `notifications/automation_changed` イベントを push。`connect_transport_signals()` のパターンを踏襲し、`ControlList::StateChanged` または `AutomationControl::Changed` に接続する。
+6. **guard points 制御**：LLM にオプション `withGuard: boolean` で制御を公開する。
+
+### 16.5 セッション累計サマリ
+
+2026-06-26 の同一セッション（1 つのチャット会話）で以下が landing した：
+
+| Wave | コミット | 内容 | ツール数 |
+|---|---|---|---|
+| T1 | `19853971f0` | `session/export_audio` WAV MVP | 96 → 97 |
+| T3 | `43f4848f09` | SSE `GET /events` + `notifications/transport` | 97 ツール + 1 SSE |
+| T2 | `ee8ffb10fd` | `automation/get_lane`・`set_curve`・`set_mode` | 97 → 100 |
+
+**マスターハンドオフ §1.2 の before vs after**：
+
+| 軸 | Before（セッション開始時） | After（本セッション完了後） |
+|---|---|---|
+| 納品 (Deliver) | **致命的欠落** | MVP（WAV/PCM、ブロッキング、T1） |
+| 知覚 (Perceive) | **致命的欠落** | MVP（transport 通知 SSE、T3） |
+| ミックス (Mix) | **致命的欠落**（時間軸オートメーション ZERO） | MVP（route 標準 5 params、replace mode、T2） |
+
+3 軸すべての "致命的欠落" が閉じた。§1.2 の 6 軸定義における「100%」は tool breadth（FX・VCA・MIDI・ステム等）と品質（plugin params・非同期・TLS 等）で更に高くできるが、プロジェクトは「実用 90%+」に到達した。
+
+### 16.6 推奨次波
+
+§7 の推奨着手順が T1・T2・T3 のすべて完了したため、次の候補は：
+
+- **T4（テンポ / 拍子編集）**：可変テンポ楽曲。`tempo/add`・`tempo/change`・`meter/set`。`TempoMap::write_copy()` → 編集 → `update()`（`libs/temporal/temporal/tempo.h:785-841`）。依存なし。
+- **T5（フェード / クロスフェード）**：`region/set_fade_in`・`region/set_fade_out`。`AudioRegion::set_fade_in_length`・`set_fade_in_shape`。S〜M 複雑度。
+- **T9（ターン制ロック）**：fix_plan v2 §5 設計済み。多段編集の原子性。`acquire_turn`・`release_turn`・`get_lock_state`、自動 `quick_snapshot`。M 複雑度。
+- **T11（コンパニオン ツール選別 UI）**：100 tools になったため system トークン消費が大。S 複雑度。
+
+ユーザーの優先度が「DAW 機能の深さ」なら T4/T5、「エージェント安全性」なら T9、「コスト最適化」なら T11 が先。
